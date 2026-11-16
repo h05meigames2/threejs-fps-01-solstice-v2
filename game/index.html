@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SOLSTICE — a three.js tactical FPS</title>
+<style>
+  /* Look plan: warm golden-hour ink on dark glass. Six values, one accent. */
+  :root {
+    --canvas: #14161a;
+    --surface: rgba(16, 18, 22, 0.82);
+    --hairline: #3a3f47;
+    --ink: #f5f1e8;
+    --muted: #c8c2b4;
+    --accent: #ffb45e;
+    --danger: #ff5a1f;
+    --radius-panel: 4px;
+    --radius-control: 8px;
+    --font-ui: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-readout: ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: var(--font-ui);
+  }
+  #game, #game canvas { position: fixed; inset: 0; display: block; }
+  #hud { position: fixed; inset: 0; pointer-events: none; }
+
+  /* crosshair: gap driven by live spread via --gap */
+  #crosshair { position: fixed; left: 50%; top: 50%; width: 22px; height: 22px; transform: translate(-50%, -50%); --gap: 5px; }
+  #crosshair i { position: absolute; background: var(--ink); opacity: .9; box-shadow: 0 0 2px rgba(0,0,0,.8); }
+  #crosshair i:nth-child(1) { left: 10px; top: calc(10px - var(--gap) - 7px); width: 2px; height: 7px; }
+  #crosshair i:nth-child(2) { left: 10px; top: calc(12px + var(--gap)); width: 2px; height: 7px; }
+  #crosshair i:nth-child(3) { top: 10px; left: calc(10px - var(--gap) - 7px); height: 2px; width: 7px; }
+  #crosshair i:nth-child(4) { top: 10px; left: calc(12px + var(--gap)); height: 2px; width: 7px; }
+  #crosshair .dot { left: 10px; top: 10px; width: 2px; height: 2px; }
+  #crosshair.ads i { background: var(--accent); }
+
+  /* v2 — STEADY tag: counter-strafe window is open, the cone is tight */
+  #steady {
+    position: fixed; left: 50%; top: calc(50% + 34px); transform: translateX(-50%);
+    font-family: var(--font-readout); font-size: 11px; letter-spacing: .22em; color: var(--accent);
+    text-shadow: 0 1px 4px rgba(0,0,0,.8);
+  }
+  #steady[hidden] { display: none; }
+
+  /* v2 — threat chevron: points at the last shot heard (rotated by bearing) */
+  #threat {
+    position: fixed; left: 50%; top: 50%; width: 0; height: 0; opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--rot, 0deg));
+  }
+  #threat i {
+    position: absolute; left: -9px; top: -72px; width: 0; height: 0;
+    border-left: 9px solid transparent; border-right: 9px solid transparent;
+    border-bottom: 14px solid var(--danger);
+  }
+  #threat.weak i { border-bottom-color: var(--accent); }
+
+  /* v2 — compass strip: cardinal points + site markers, driven by yaw */
+  #compass {
+    position: fixed; top: 2px; left: 50%; transform: translateX(-50%);
+    width: 340px; height: 18px; overflow: hidden;
+    font-family: var(--font-readout); font-size: 11px; color: var(--muted);
+    text-align: center; border-bottom: 1px solid rgba(255,255,255,.12);
+    text-shadow: 0 1px 4px rgba(0,0,0,.8);
+  }
+  #compass span { position: absolute; top: 1px; transform: translateX(-50%); }
+  #compass .site { color: var(--accent); font-weight: 700; }
+  #compass .card { color: var(--ink); }
+  #zone {
+    font-size: 11px; letter-spacing: .18em; color: var(--muted); margin-top: 2px;
+    text-shadow: 0 1px 4px rgba(0,0,0,.7);
+  }
+
+  #hitmarker, #killmarker { position: fixed; left: 50%; top: 50%; width: 26px; height: 26px; transform: translate(-50%, -50%) rotate(45deg); opacity: 0; transition: opacity 90ms linear; }
+  #hitmarker.on, #killmarker.on { opacity: 1; }
+  #hitmarker i, #killmarker i { position: absolute; background: var(--ink); }
+  #killmarker i { background: var(--danger); }
+  #hitmarker i:nth-child(1), #killmarker i:nth-child(1) { left: 12px; top: 0; width: 2px; height: 8px; }
+  #hitmarker i:nth-child(2), #killmarker i:nth-child(2) { left: 12px; bottom: 0; width: 2px; height: 8px; }
+  #hitmarker i:nth-child(3), #killmarker i:nth-child(3) { top: 12px; left: 0; height: 2px; width: 8px; }
+  #hitmarker i:nth-child(4), #killmarker i:nth-child(4) { top: 12px; right: 0; height: 2px; width: 8px; }
+
+  #health {
+    position: fixed; left: 32px; bottom: 24px; width: 220px;
+    font-family: var(--font-readout); font-size: 13px; color: var(--muted);
+  }
+  #health-bar { height: 8px; background: rgba(255,255,255,.14); border-radius: 2px; overflow: hidden; margin-top: 4px; }
+  #health-fill { height: 100%; width: 100%; background: #7ec98f; transition: width 120ms linear; }
+  #health-fill.low { background: var(--danger); }
+  #health-num { font-size: 26px; color: var(--ink); }
+  #armor { display: block; margin-top: 2px; color: var(--accent); }
+
+  #ammo {
+    position: fixed; right: 32px; bottom: 24px; text-align: right;
+    font-family: var(--font-readout);
+  }
+  #ammo-mag { font-size: 56px; line-height: 1; letter-spacing: -0.03em; color: var(--ink); }
+  #ammo.empty #ammo-mag { color: var(--danger); }
+  #ammo-reserve { font-size: 16px; color: var(--muted); }
+  #weapon-name { display: block; font-size: 13px; color: var(--muted); margin-top: 2px; }
+
+  #topbar {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    text-align: center; font-family: var(--font-readout);
+  }
+  #timer { font-size: 30px; letter-spacing: .04em; text-shadow: 0 1px 6px rgba(0,0,0,.7); }
+  #timer.danger { color: var(--danger); }
+  #score { font-size: 14px; color: var(--muted); text-shadow: 0 1px 4px rgba(0,0,0,.7); }
+  #score b { color: var(--ink); font-weight: 500; }
+  #round-label { font-size: 12px; letter-spacing: .14em; color: var(--accent); margin-top: 2px; text-shadow: 0 1px 4px rgba(0,0,0,.7); }
+
+  #money {
+    position: fixed; top: 20px; right: 32px;
+    font-family: var(--font-readout); font-size: 20px; color: var(--accent);
+    text-shadow: 0 1px 4px rgba(0,0,0,.7);
+  }
+  #feed {
+    position: fixed; top: 64px; right: 32px; width: 300px; text-align: right;
+    font-family: var(--font-readout); font-size: 13px;
+  }
+  .feed-item { color: var(--ink); text-shadow: 0 1px 4px rgba(0,0,0,.8); margin-bottom: 3px; }
+  .feed-item.bad { color: #ffb0a0; }
+
+  #banner {
+    position: fixed; top: 22%; left: 50%; transform: translateX(-50%);
+    text-align: center; pointer-events: none;
+  }
+  #banner[hidden] { display: none; }
+  #banner-title { font-size: 44px; font-weight: 600; letter-spacing: .06em; text-shadow: 0 2px 14px rgba(0,0,0,.8); }
+  #banner-sub { font-size: 16px; color: var(--muted); margin-top: 4px; text-shadow: 0 1px 6px rgba(0,0,0,.8); }
+
+  #bomb, #defuse, #plant {
+    position: fixed; left: 50%; transform: translateX(-50%); top: 31%;
+    width: 260px; text-align: center; font-family: var(--font-readout); font-size: 13px;
+  }
+  #bomb[hidden], #defuse[hidden], #plant[hidden] { display: none; }
+  #bomb-timer { font-size: 26px; color: var(--danger); }
+  .progress { height: 8px; background: rgba(255,255,255,.16); border-radius: 2px; overflow: hidden; margin-top: 5px; }
+  .progress i { display: block; height: 100%; width: 0; background: var(--accent); }
+
+  #hint {
+    position: fixed; bottom: 96px; left: 50%; transform: translateX(-50%);
+    font-size: 13px; color: var(--muted); text-shadow: 0 1px 4px rgba(0,0,0,.8);
+    font-family: var(--font-readout);
+  }
+
+  .overlay {
+    position: fixed; inset: 0; display: grid; place-items: center; padding: 24px;
+    background: rgba(12, 14, 18, 0.72);
+  }
+  .overlay[hidden] { display: none; }
+  .panel {
+    width: min(460px, 100%); padding: 32px; background: var(--surface);
+    border: 1px solid var(--hairline); border-radius: var(--radius-panel);
+    backdrop-filter: blur(4px);
+  }
+  .panel h1 { margin: 0 0 8px; font-size: 36px; line-height: 1.1; font-weight: 600; letter-spacing: .04em; }
+  .panel h1 em { font-style: normal; color: var(--accent); }
+  .panel p { margin: 0 0 24px; max-width: 46ch; font-size: 15px; line-height: 1.55; color: var(--muted); }
+  #play {
+    font: inherit; font-weight: 600; padding: 12px 20px; border: 1px solid var(--accent);
+    border-radius: var(--radius-control); background: var(--accent); color: #1a1206; cursor: pointer;
+  }
+  #play:hover { background: var(--ink); border-color: var(--ink); }
+  #play:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .keys { margin: 24px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; font-size: 14px; color: var(--muted); }
+  .keys li { display: flex; align-items: center; gap: 8px; }
+  .keys kbd {
+    min-width: 24px; padding: 2px 6px; border: 1px solid var(--hairline); border-radius: var(--radius-panel);
+    font-family: var(--font-readout); font-size: 12px; color: var(--ink); text-align: center;
+  }
+
+  #buy {
+    position: fixed; inset: 0; display: grid; place-items: center; padding: 24px;
+    background: rgba(12, 14, 18, 0.55); pointer-events: auto;
+  }
+  #buy[hidden] { display: none; }
+  .buy-panel {
+    width: min(560px, 100%); padding: 24px 28px; background: var(--surface);
+    border: 1px solid var(--hairline); border-radius: var(--radius-panel);
+  }
+  .buy-panel h2 { margin: 0 0 4px; font-size: 22px; }
+  .buy-panel h2 span { color: var(--accent); font-family: var(--font-readout); font-size: 16px; float: right; }
+  .buy-panel p { margin: 0 0 16px; color: var(--muted); font-size: 14px; }
+  .buy-panel p b { color: var(--ink); font-family: var(--font-readout); }
+  #buy-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .buy-item {
+    font: inherit; text-align: left; padding: 12px 14px; cursor: pointer;
+    background: rgba(255,255,255,.05); color: var(--ink);
+    border: 1px solid var(--hairline); border-radius: var(--radius-control);
+    display: grid; gap: 2px;
+  }
+  .buy-item:hover:not(:disabled) { border-color: var(--accent); }
+  .buy-item:disabled { opacity: .45; cursor: default; }
+  .buy-item.owned { border-color: var(--accent); }
+  .buy-item b { font-size: 15px; }
+  .buy-item span { font-size: 12px; color: var(--muted); }
+  .buy-item i { font-style: normal; font-family: var(--font-readout); color: var(--accent); font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="game"></div>
+
+<div id="hud" aria-hidden="true">
+  <div id="crosshair"><i></i><i></i><i></i><i></i><i class="dot"></i></div>
+  <div id="steady" hidden>STEADY</div>
+  <div id="threat"><i></i></div>
+  <div id="hitmarker"><i></i><i></i><i></i><i></i></div>
+  <div id="killmarker"><i></i><i></i><i></i><i></i></div>
+
+  <div id="compass">
+    <span data-mark="N" class="card">N</span><span data-mark="E" class="card">E</span>
+    <span data-mark="S" class="card">S</span><span data-mark="W" class="card">W</span>
+    <span data-mark="A" class="site">A</span><span data-mark="B" class="site">B</span>
+  </div>
+
+  <div id="health">
+    <span id="health-num">100</span> HP
+    <div id="health-bar"><div id="health-fill"></div></div>
+    <span id="armor"></span>
+  </div>
+  <div id="ammo"><span id="ammo-mag">12</span><span id="ammo-reserve">/ 48</span><span id="weapon-name">P9 Sidearm</span></div>
+
+  <div id="topbar">
+    <div id="timer">1:40</div>
+    <div id="score">SOLSTICE <b>0 — 0</b> · ROUND 1</div>
+    <div id="round-label"></div>
+    <div id="zone">WARDEN RIDGE</div>
+  </div>
+  <div id="money">$800</div>
+  <div id="feed"></div>
+
+  <div id="banner" hidden><div id="banner-title"></div><div id="banner-sub"></div></div>
+  <div id="bomb" hidden>DEVICE PLANTED — <span id="bomb-timer">0:35</span></div>
+  <div id="defuse" hidden>DEFUSING…<div class="progress"><i id="defuse-fill"></i></div></div>
+  <div id="plant" hidden>RAIDER PLANTING…<div class="progress"><i id="plant-fill"></i></div></div>
+  <div id="hint"></div>
+
+  <div id="buy" hidden>
+    <div class="buy-panel">
+      <h2>Buy phase <span id="buy-money">$800</span></h2>
+      <p>Round starts in <b id="buy-timer">0:20</b> — click to buy, or press <b>B</b> to deploy early.</p>
+      <div id="buy-grid"></div>
+    </div>
+  </div>
+</div>
+
+<div id="overlay" class="overlay">
+  <section class="panel" role="dialog" aria-modal="true" aria-labelledby="overlay-title">
+    <h1 id="overlay-title">SOL<em>STICE</em></h1>
+    <p id="overlay-copy">Golden hour over the alpine observatory. You hold the Dome and the Relay against four raiders carrying a device. First to 7 rounds takes the match.</p>
+    <button id="play" type="button">Deploy</button>
+    <ul class="keys">
+      <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Move · <kbd>Shift</kbd> Sprint · <kbd>Ctrl</kbd> Crouch · <kbd>Space</kbd> Jump</li>
+      <li><kbd>Mouse</kbd> Look · <kbd>Click</kbd> Fire · <kbd>Right-click</kbd> Aim</li>
+      <li><kbd>R</kbd> Reload · <kbd>1–5</kbd> Weapons · <kbd>6</kbd> Frag · <kbd>7</kbd> Smoke · <kbd>E</kbd> Defuse (hold)</li>
+      <li><kbd>B</kbd> Skip buy phase</li>
+      <li>Wallbangs: thin wood &amp; stone cover can be shot through · Counter-strafe: tap the opposite strafe key to steady your aim (STEADY)</li>
+    </ul>
+  </section>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.min.js"
+  }
+}
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
